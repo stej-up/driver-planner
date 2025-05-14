@@ -1,110 +1,107 @@
+import streamlit as st
 import pandas as pd
-import os
-from datetime import datetime
 import random
+from io import BytesIO
+from datetime import datetime
 
-# Load data (without modifying original template)
-file_path = r'C:\Users\stege\OneDrive\Documents\vesta_automation\template_planning.xlsx'
-drivers_df = pd.read_excel(file_path, sheet_name='drivers')
-games_df = pd.read_excel(file_path, sheet_name='games')
+st.set_page_config(page_title="Vesta Planning Tool", layout="centered")
+st.title("🚌 Vesta Driver & Laundry Planner")
 
-# Work on a *copy* of the original drivers dataframe
-drivers_working_copy = drivers_df.copy()
+st.markdown("""
+Upload your Excel file using the provided template format. The tool will assign drivers and laundry duties automatically.
 
-# Reset drivers trip count if necessary / prepare counts
-drivers_working_copy['count_trips'] = drivers_working_copy['count_trips'].fillna(0).astype(int)
-drivers_working_copy['count_wassen'] = drivers_working_copy['count_wassen'].fillna(0).astype(int)
+- `drivers` sheet must contain: **Speler**, **count_trips**, **count_wassen**
+- `games` sheet must contain: **Datum**, **Start_wedstrijd**, **Tegenstander**, **Thuis/Uit**, **Verzamelen**, **chauffeurs nodig**
+""")
 
-# Initialize planning list
-planning = []
+# Template download (if you included template_planning.xlsx in the repo)
+try:
+    with open("template_planning.xlsx", "rb") as template_file:
+        st.download_button(
+            label="📥 Download Example Template",
+            data=template_file,
+            file_name="template_planning.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+except FileNotFoundError:
+    st.warning("⚠️ Template file not found. Please add 'template_planning.xlsx' to the repo if you want to make it downloadable.")
 
-# Loop through all games
-for idx, game in games_df.iterrows():
-    planning_entry = {
-        'Datum': game['Datum'],
-        'Start_wedstrijd': game['Start_wedstrijd'],
-        'Tegenstander': game['Tegenstander'],
-        'Thuis/Uit': game['Thuis/Uit'],
-        'Verzamelen': game['Verzamelen']
-    }
+uploaded_file = st.file_uploader("📤 Upload Filled Excel Template", type=["xlsx"])
 
-    # Always define these first!
-    selected_drivers = pd.DataFrame()
-    sorted_drivers = pd.DataFrame()
+if uploaded_file:
+    try:
+        # Load sheets from uploaded file
+        drivers_df = pd.read_excel(uploaded_file, sheet_name='drivers')
+        games_df = pd.read_excel(uploaded_file, sheet_name='games')
 
-    if game['chauffeurs nodig'] > 0:
-        needed = game['chauffeurs nodig']
-        selected_drivers = pd.DataFrame()
+        # Prepare working copy
+        drivers_working_copy = drivers_df.copy()
+        drivers_working_copy['count_trips'] = drivers_working_copy['count_trips'].fillna(0).astype(int)
+        drivers_working_copy['count_wassen'] = drivers_working_copy['count_wassen'].fillna(0).astype(int)
 
-        # Keep track of who’s already selected (to avoid duplicates)
-        already_selected = set()
+        planning = []
 
-        # While we still need drivers
-        while len(selected_drivers) < needed:
-            # Find the minimum trip count among unselected drivers
-            remaining_drivers = drivers_working_copy[~drivers_working_copy.index.isin(already_selected)]
-            min_trips = remaining_drivers['count_trips'].min()
+        for _, game in games_df.iterrows():
+            planning_entry = {
+                'Datum': game['Datum'],
+                'Start_wedstrijd': game['Start_wedstrijd'],
+                'Tegenstander': game['Tegenstander'],
+                'Thuis/Uit': game['Thuis/Uit'],
+                'Verzamelen': game['Verzamelen']
+            }
 
-            # Get all drivers with that count
-            eligible = remaining_drivers[remaining_drivers['count_trips'] == min_trips]
+            selected_drivers = pd.DataFrame()
+            already_selected = set()
 
-            # How many more drivers do we need?
-            remaining_slots = needed - len(selected_drivers)
+            if game['chauffeurs nodig'] > 0:
+                needed = game['chauffeurs nodig']
+                while len(selected_drivers) < needed:
+                    remaining = drivers_working_copy[~drivers_working_copy.index.isin(already_selected)]
+                    min_trips = remaining['count_trips'].min()
+                    eligible = remaining[remaining['count_trips'] == min_trips]
+                    pick_count = min(needed - len(selected_drivers), len(eligible))
+                    picked = eligible.sample(n=pick_count)
+                    selected_drivers = pd.concat([selected_drivers, picked])
+                    already_selected.update(picked.index)
 
-            # Pick as many as we can from this group
-            pick_count = min(remaining_slots, len(eligible))
-            picked = eligible.sample(n=pick_count, random_state=None)
+                drivers_working_copy.loc[selected_drivers.index, 'count_trips'] += 1
+                for i, driver in enumerate(selected_drivers['Speler']):
+                    planning_entry[f'Chauffeur {i + 1}'] = driver
 
-            # Add to selected list and mark as used
-            selected_drivers = pd.concat([selected_drivers, picked])
-            already_selected.update(picked.index)
+            if not selected_drivers.empty:
+                laundry_driver = selected_drivers.sort_values('count_wassen').iloc[0]['Speler']
+            else:
+                min_wash = drivers_working_copy['count_wassen'].min()
+                eligible = drivers_working_copy[drivers_working_copy['count_wassen'] == min_wash]
+                laundry_driver = random.choice(eligible['Speler'].tolist())
 
-        # Update assigned trip counts
-        drivers_working_copy.loc[selected_drivers.index, 'count_trips'] += 1
+            drivers_working_copy.loc[drivers_working_copy['Speler'] == laundry_driver, 'count_wassen'] += 1
+            planning_entry['Wasbeurt'] = laundry_driver
+            planning.append(planning_entry)
 
-        # Assign drivers to planning
-        for i, driver_name in enumerate(selected_drivers['Speler']):
-            planning_entry[f'Chauffeur {i + 1}'] = driver_name
+        planning_df = pd.DataFrame(planning)
 
-    # --- Laundry (Wasbeurt) assignment ---
-    if not selected_drivers.empty:
-        # If drivers exist, pick randomly among today's drivers
-        selected_drivers_sorted = selected_drivers.sort_values('count_wassen')
-        laundry_driver = selected_drivers_sorted.iloc[0]['Speler']
-    else:
-        # If no drivers assigned, pick the person with fewest laundry duties
-        # Find the minimum wash count in the full list
-        min_wash = drivers_working_copy['count_wassen'].min()
+        st.success("✅ Planning generated successfully!")
+        st.subheader("📋 Planning Preview")
+        st.dataframe(planning_df)
 
-        # Get all drivers with that minimum count
-        eligible = drivers_working_copy[drivers_working_copy['count_wassen'] == min_wash]
+        # Output to Excel for download
+        output = BytesIO()
+        today_str = datetime.today().strftime('%Y-%m-%d')
+        output_filename = f'driver_planning_{today_str}.xlsx'
+        with pd.ExcelWriter(output, engine='openpyxl', datetime_format='DD-MM-YYYY') as writer:
+            drivers_working_copy.to_excel(writer, sheet_name='drivers', index=False)
+            games_df.to_excel(writer, sheet_name='games', index=False)
+            planning_df.to_excel(writer, sheet_name='planning', index=False)
 
-        # Pick one randomly from those eligible
-        laundry_driver = random.choice(eligible['Speler'].tolist())
+        st.download_button(
+            label="⬇️ Download Planning Excel File",
+            data=output.getvalue(),
+            file_name=output_filename,
+            mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
 
-    # Update laundry duty
-    planning_entry['Wasbeurt'] = laundry_driver
-    drivers_working_copy.loc[drivers_working_copy['Speler'] == laundry_driver, 'count_wassen'] += 1
-
-    # Add entry to planning list
-    planning.append(planning_entry)
-
-# --- Create planning DataFrame ---
-planning_df = pd.DataFrame(planning)
-
-# --- Output section ---
-output_folder = r'C:\Users\stege\OneDrive\Documents\vesta_automation\output'
-os.makedirs(output_folder, exist_ok=True)  # Create the output folder if it doesn't exist
-
-# Add today's date to the filename
-today_str = datetime.today().strftime('%Y-%m-%d')
-output_filename = f'driver_planning_full_{today_str}.xlsx'
-output_path = os.path.join(output_folder, output_filename)
-
-# Save new file
-with pd.ExcelWriter(output_path, engine='openpyxl', datetime_format='DD-MM-YYYY') as writer:
-    drivers_working_copy.to_excel(writer, sheet_name='drivers', index=False)
-    games_df.to_excel(writer, sheet_name='games', index=False)
-    planning_df.to_excel(writer, sheet_name='planning', index=False)
-
-print(f"Planning saved successfully to: {output_path}")
+    except Exception as e:
+        st.error(f"❌ Error processing file: {e}")
+else:
+    st.info("👆 Upload a filled Excel template to begin.")
