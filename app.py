@@ -5,13 +5,13 @@ from io import BytesIO
 from datetime import datetime
 
 st.set_page_config(page_title="Vesta Planning Tool", layout="centered")
-st.title("🚌 Vesta Driver & Laundry Planner")
+st.title("Vesta rit-en wasschema")
 
 st.markdown("""
-Upload your Excel file using the provided template format. The tool will assign drivers and laundry duties automatically.
+Upload je ingevulde excel (op basis van het aangeleverde template). Deze tool zal automatisch een planning maken om te rijden en te wassen.
 
-- `drivers` sheet must contain: **Speler**, **count_trips**, **count_wassen**
-- `games` sheet must contain: **Datum**, **Start_wedstrijd**, **Tegenstander**, **Thuis/Uit**, **Verzamelen**, **chauffeurs nodig**
+- `drivers` moet bevatten: **Speler**, **count_trips**, **count_wassen**
+- `games` moet bevatten: **Datum**, **Start_wedstrijd**, **Tegenstander**, **Thuis/Uit**, **Verzamelen**, **chauffeurs nodig**
 """)
 
 # Template download (if you included template_planning.xlsx in the repo)
